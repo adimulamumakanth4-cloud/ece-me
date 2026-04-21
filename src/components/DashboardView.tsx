@@ -49,36 +49,40 @@ export default function DashboardView({ state, updateTasks, updateState }: Dashb
     setLoadingExplanation(true);
     try {
       const result = await explainConcept(concept);
-      setExplanation(result || "Failed to process concept.");
+      const responseText = result || "Failed to process concept.";
+      setExplanation(responseText);
       
-      // Extract steps: [STEP 1]: ...
-      const steps = result?.match(/\[STEP \d\]:.*?(?=\[STEP \d\]|\*\*|\n\n|$)/gs) || [];
-      setInteractiveSteps(steps.map(s => s.replace(/\[STEP \d\]: /, '').trim()));
+      // Extract steps: [STEP X]: ... (more robust)
+      const steps = responseText.match(/\[STEP \d\]:?.*?(?=\[STEP \d\]|\*\*|\n\n|$)/gs) || [];
+      setInteractiveSteps(steps.map(s => s.replace(/\[STEP \d\]:?\s*/, '').trim()));
       setCurrentStep(0);
 
-      // Claude Feature: Artifact Extraction
-      const artifactMatch = result?.match(/\[ARTIFACT: (.*?)\]([\s\S]*?)\[\/ARTIFACT\]/);
-      if (artifactMatch) {
-        const title = artifactMatch[1];
-        const content = artifactMatch[2].trim();
-        const newArtifact: Artifact = {
+      // Claude Feature: Multiple Artifact Extraction
+      const artifactRegex = /\[ARTIFACT:\s*(.*?)\]([\s\S]*?)\[\/ARTIFACT\]/g;
+      const newArtifacts: Artifact[] = [];
+      let match;
+      while ((match = artifactRegex.exec(responseText)) !== null) {
+        newArtifacts.push({
           id: Math.random().toString(36).substr(2, 9),
-          title,
-          content,
-          type: content.includes('{') || content.includes('(') ? 'code' : 'report',
+          title: match[1],
+          content: match[2].trim(),
+          type: match[2].includes('{') || match[2].includes('(') ? 'code' : 'report',
           timestamp: Date.now()
-        };
-        updateState({ artifacts: [newArtifact, ...state.artifacts].slice(0, 10) });
+        });
+      }
+      
+      if (newArtifacts.length > 0) {
+        updateState({ artifacts: [...newArtifacts, ...(state.artifacts || [])].slice(0, 15) });
       }
 
       // Claude Feature: Thread History
       const newThread: ResearchThread = {
         id: Math.random().toString(36).substr(2, 9),
         topic: concept,
-        summary: result?.substring(0, 100) + '...',
+        summary: responseText.substring(0, 100) + '...',
         timestamp: Date.now()
       };
-      updateState({ researchThreads: [newThread, ...state.researchThreads].slice(0, 15) });
+      updateState({ researchThreads: [newThread, ...(state.researchThreads || [])].slice(0, 15) });
 
     } catch (err) {
       setExplanation("Error communicating with my central net. Try again.");
@@ -124,9 +128,18 @@ export default function DashboardView({ state, updateTasks, updateState }: Dashb
         <section>
           <h3 className="text-[10px] font-bold text-slate-500 uppercase mb-4 tracking-[0.2em] mono">System Modules</h3>
           <div className="space-y-3">
-            {state.subjects.map(s => (
-              <div key={s.id} className="p-3 bg-slate-800/40 rounded border border-slate-700/50">
-                <p className="text-xs font-semibold text-slate-300">{s.name}</p>
+            {state.subjects?.map(s => (
+              <div 
+                key={s.id} 
+                className="p-3 bg-slate-800/40 rounded border border-slate-700/50 group cursor-pointer hover:border-blue-500/30 transition-all"
+                onClick={() => updateState({ 
+                  subjects: state.subjects.map(subj => subj.id === s.id ? { ...subj, isTough: !subj.isTough } : subj) 
+                })}
+              >
+                <div className="flex justify-between items-center mb-1">
+                  <p className="text-xs font-semibold text-slate-300">{s.name}</p>
+                  <div className={`w-2 h-2 rounded-full ${s.isTough ? 'bg-amber-500 animate-pulse' : 'bg-blue-500/30'}`} title={s.isTough ? "Priority: High" : "Priority: Standard"} />
+                </div>
                 <div className="w-full bg-slate-700/30 h-1 mt-2 rounded-full overflow-hidden">
                   <motion.div 
                     initial={{ width: 0 }}
@@ -134,6 +147,9 @@ export default function DashboardView({ state, updateTasks, updateState }: Dashb
                     className={`h-full ${s.isTough ? 'bg-amber-500' : 'bg-blue-500'}`}
                   />
                 </div>
+                <p className="text-[8px] text-slate-600 mt-2 uppercase font-bold mono group-hover:text-slate-400 transition-colors">
+                  {s.isTough ? "Deep Focus Required" : "Module Active"}
+                </p>
               </div>
             ))}
           </div>
@@ -431,7 +447,7 @@ export default function DashboardView({ state, updateTasks, updateState }: Dashb
                             {/* Artifacts Gallery (Claude Style) */}
                             {(state.artifacts?.length || 0) > 0 && (
                               <div className="grid grid-cols-2 gap-4 mt-8">
-                                {state.artifacts?.filter(a => explanation.includes(a.title) || true).slice(0, 4).map(artifact => (
+                                {state.artifacts?.filter(a => explanation?.includes(a.title)).slice(0, 4).map(artifact => (
                                   <button 
                                     key={artifact.id}
                                     onClick={() => setActiveArtifactId(artifact.id)}
